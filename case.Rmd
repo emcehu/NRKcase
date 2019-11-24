@@ -1,0 +1,207 @@
+---
+title: "NRK case"
+author: "Emil"
+date: "today"
+output: html_document
+---
+
+```{r}
+require(data.table)
+require(ggplot2)
+## require(lubridate)
+```
+
+
+Leser inn datasettet.
+```{r}
+dt = fread("unge-lovende.csv")
+```
+
+Starter med å bli litt kjent med dataene. Hvordan ser de seks første og seks siste radene ut?
+```{r}
+head(dt)
+tail(dt)
+```
+
+Er det noen dupliserte rader?
+
+```{r}
+dt[duplicated(dt), .N]
+dt = dt[!duplicated(dt)]
+```
+Det var noen, så jeg fjernet dem.
+
+Undersøker dimensjonene til dt
+```{r}
+dim(dt)
+```
+Nesten 590 000 rader.
+
+Sjekker hvor mange unike brukere det er
+```{r}
+dt[, uniqueN(userId)]
+```
+Over 148 000 unike brukerider.
+
+For å forenkle visualiseringen lager jeg en variabel med visitStartTime formatert som POSIXct. I tillegg lager jeg en variabel som forenkler lesingen av tidsforløpet timeWithinVisit og episoden.
+
+Episoden er det tredje siste sifferet i programId. Sjekker hvordan verdiene ser ut.
+```{r}
+unique(dt$programId)
+```
+
+Alle de seks unike verdiene er bygget opp på samme måte. Det 10. tegnet er episoden.
+```{r}
+ep = strtoi(substr(dt$programId, 10, 10))
+ep[1:6]
+```
+
+Konverterer visitStartTime til en POSIXct-verdier.
+```{r}
+st = structure(dt$visitStartTime, class=c('POSIXt', 'POSIXct'))
+st[1:6]
+min(st)
+```
+
+Lager en ny variabelsom viser tidspunktet episoden var ferdig.
+```{r}
+vt = dt$visitStartTime + dt$timeWithinVisit/1000
+vt = structure(vt, class=c('POSIXt', 'POSIXct'))
+head(vt)
+```
+
+Lager en variabel som viser tidsdelta i timer, minutter og sekunder fra sesjonen startet til episoden var ferdig.
+```{r}
+td = structure(vt - st, class=c('POSIXt', 'POSIXct'))
+td = format(td-3600, "%H:%M:%OS3")
+head(td)
+```
+
+Sjekker hvor lenge den lengste timeWithinVisit er for å finne ut
+hvor store tidsenheter jeg trenger.
+```{r}
+max(td)
+```
+Største besøkstid er litt over ni timer. (Lurer på hvor mange episoder brukeren så:
+
+```{r}
+dt[userId == userId[timeWithinVisit == max(timeWithinVisit)]][order(visitStartTime, timeWithinVisit)]
+```
+Ser ut til at brukeren var på en binge-watching streak.
+)
+
+Legger til variablene til dt. (Døper om til sesjonstart og sluttid)
+```{r}
+dt[, c('episode', 'sesjonstart', 'episodeslutt', "delta") := .(ep, st, vt, td)]
+head(dt)
+```
+
+Hva kan vi nå lese fra dette? Jeg finner en bruker som har sett flere episoder.
+```{r}
+a = dt[, .(unikeEpisoder = uniqueN(episode)), by = .(userId, sesjonstart)]
+head(a)
+```
+Jeg velger brukeren på tredje linje og sorterer utskriften kronologisk.
+```{r}
+dt[userId == userId[3]][order(sesjonstart, episodeslutt)]
+```
+Brukeren begynte å se episode fem 10. november 2015. Denne episoden var ferdig 27 minutter etter at sesjonen på NRK TV ble startet kl. 16:39. Deretter så brukeren episode seks som var ferdig en halv time senere. Neste sesjon startet 19:42 samme dag. Da så brukeren ferdig første episode 3 minutter(?) etter starten på sesjonen. De neste fire episodene gikk slag i slag, og brukeren avsluttet 1:47 timer etter sesjonsstart. Brukeren hadde vært innom episode fem to ganger.
+
+La oss se på noen statistikker. 
+Hvor mange har vært innom de ulike episodene?
+```{r}
+(p = dt[, .(antallBrukere = uniqueN(userId)), by = episode][order(episode)])
+ggplot(p, aes(episode, antallBrukere)) + geom_point() + scale_x_continuous(breaks=c(1,2,3,4,5,6), labels=c(1,2,3,4,5,6)) + coord_cartesian(ylim= c(0,115000))
+```
+
+Nesten 112 000 har sett episode 1. Dette tallet synker til ca. 95 000 for episode 2
+og siden minker det til ca. 87 500. Jeg syns det er litt rart at av 148 000 brukere
+har bare 112 000 sett episode 1.
+
+Ut fra NRKs perspektiv, tror jeg det ville være interessant å få besvart følgende spørsmål:
+1. Hvor mange har sett alle episodene?
+2. Når ble de ulike episodene sett? 
+3. Hvor mange så serien idet den ble sluppet?
+3. Hvor mange har bare sett noen episoder?
+4. Hvor mange har bare sett en ufullstendig episode?
+5. Hva er alderen på seerne?
+
+De tre første spørsmålene sier noe om dem som likte serien, mens de to siste spørsmålene sier noe om hvor mange som ikke likte den så godt.
+
+La oss se når episodene ble sett
+```{r}
+tp = dt[, .(Antall=.N), by = .(dato = format(episodeslutt, "%Y-%m-%d"), tid = format(episodeslutt, "%H"))]
+tp[, c("dato", "tid") := .(as.POSIXct(dato, format = "%Y-%m-%d"), as.POSIXct(tid, format = "%H"))]
+head(tp)
+ggplot(tp, aes(dato, tid, size=Antall)) + geom_point() + scale_y_datetime(date_labels = "%R")
+```
+Dette ikke så informativt som jeg hadde håpet. Jeg ser på antall per dag i stedet.
+
+```{r}
+tp = dt[, .(Antall=.N), by = .(dato = format(episodeslutt, "%Y-%m-%d"))]
+tp[, c("dato", "dag") := .(as.POSIXct(dato, format = "%Y-%m-%d"), format(as.POSIXct(dato, format="%Y-%m-%d"), "%A"))]
+head(tp[order(-Antall)])
+ggplot(tp, aes(dato, Antall)) + geom_point() + geom_line()
+```
+Diagrammet viser at serien har avtagende antall visninger per dag, med topper de tre første søndagene etter at serien ble sluppet. Etter de tre første søndagene daler høyden på toppene betydelig.
+
+La oss finne ut hvor mange som har sett alle episodene.
+
+```{r}
+ae = dt[,.(settEpisoder = uniqueN(episode)) ,by = .(userId)]
+head(ae)
+ae[, .(antall = .N), by = settEpisoder][order(-settEpisoder)]
+ae[, .N]
+```
+Ca. 58 000 har sett alle episodene. Nesten 38 000 har bare sett én episode. Litt over 50 000 har sett mellom to og fem episoder.
+
+## Seriefråtsing (Binge-watching)
+Definisjonen på seriefråtsing er litt vag, men i henhold til wikipedia viste en undersøkelse som Netflix gjorde i februar 2014 at 73 % definerer seriefråtsing som å se mellom to og seks episoder i strekk. Wikipedia henviser også til en artikkel av Trouleau, Ashkan, Ding og Eiksson (2016)[^1] som argumenterer med at definisjonen bør sees i konteksten av innholdet i programmet.
+
+Hvor mange har sett mer enn én episode i strekk?
+
+Hvordan kan "i strekk" defineres på bakgrunn av tilgjengelige data? Jeg kan tenke meg tre forslag til definisjon:
+1. Brukere som har flere episoder med samme starttid.
+2. Punkt 1 i tillegg til at episodene er i koronoloisk rekkefølge.
+3. Det er minder enn 30 min diff i besøkstid mellom to episoder.
+
+I punkt én blir det ikke tatt hensyn til om det er en lengre pause mellom to episoder, eller hvor vidt episodene følger hverandre kronologisk. (Jeg har ikke sett Unge lovende, men jeg har inntrykk av at episodene følger en kronologisk utvikling og dermed ikke er ment å bli sett uavhengig.)
+
+Punkt to setter krav om at episodene skal bli sett i kronologisk rekkefølge. Dette er egentlig ikke et krav for seriefråtsing. Definisjonen gjør ikke noe med krav om pause.
+
+Punkt tre settes det krav om at episodene følger hverandre med mindre enn 30 min mellom mellom hver episode. Jeg tror det er sannsynlig at episodene også følger kronologisk ut fra dette kravet. Dermed vil punkt tre være inneholdt i punkt to som vil være inneholdt i punkt én.
+
+Etter å ha tenkt litt er inntrykket mitt at punkt tre er den mest riktige definisjonen av dem jeg har foreslått. La meg allikevel se litt bredt på det ved å telle opp antallet i definisjon én.
+
+Jeg teller opp hvor mange brukere som har sett flere episoder med samme starttid. For å få til dette må jeg finne starttiden for den første episoden som ble sett for hver unike kombinasjon av bruker og starttid.
+```{r}
+dt[, rank:=frank(episodeslutt), by=.(userId, sesjonstart)]
+dt[userId == userId[rank == max(rank)]][order(sesjonstart, episodeslutt)]
+```
+Her har vi funnet en superseriefråtser!
+
+Da er det bare å telle hva som er maks rank for hver gruppe
+```{r}
+dt[, .(maksRank = max(rank)), by = .(userId, sesjonstart)][, .(.N), by = .(maksRank)][order(maksRank)]
+```
+Det er visst noen som ser serien flere ganger i strekk.
+
+Nå legger jeg til en variabel som forteller hvor mange minutter det er mellom slutten av to etterfølgende episoder.
+
+```{r}
+df = dt[order(userId, sesjonstart, episodeslutt), .(deltaForrige = difftime(episodeslutt, shift(episodeslutt, 1, type="lag"), units = "mins")), keyby = .(userId, sesjonstart)]
+```
+
+I tillegg er jeg interessert i å se spredningen i tidsforskjellen mellom slutttidene til episodene. 
+
+```{r}
+df[, .(snitt = mean(deltaForrige, na.rm=TRUE), nedre = quantile(deltaForrige, .25, na.rm=TRUE), median = quantile(deltaForrige, .5, na.rm=TRUE), øvre = quantile(deltaForrige, .75, na.rm=TRUE))]
+```
+
+Hvor mange har sett to, tre, osv episoder med mindre enn 35 minutter mellom sluttidene?
+```{r}
+df[deltaForrige < 35, .(episoderEtterHverandre = .N), by = .(userId, sesjonstart)][, .(antall = .N), by = .(episoderEtterHverandre)][order(episoderEtterHverandre)]
+```
+Utskriften viser at det er 68 917 brukere som har hatt en sesjon hvor de har sett to episoder etter hverandre. 
+
+[^1]: <https://dl.acm.org/citation.cfm?doid=2939672.2939792>
